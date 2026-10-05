@@ -1,5 +1,9 @@
 import { Router, type Request, type Response } from "express";
-import { zStudentPostBody, zStudentId } from "../libs/zodValidators.js";
+import {
+  zStudentPostBody,
+  zStudentPutBody,
+  zStudentId,
+} from "../libs/zodValidators.js";
 
 import type { Student, CustomRequest } from "../libs/types.js";
 
@@ -183,4 +187,141 @@ router.post(
   },
 );
 
+// PUT /api/v3/students, body = { studentId, firstName?, lastName?, program?, interests?, emails? }
+// update only the fields that are sent
+router.put(
+  "/",
+  authenticateToken,
+  checkRoles,
+  async (req: CustomRequest, res: Response) => {
+    try {
+      const user = req.user;
+
+      // validate req.body with predefined validator
+      const result = zStudentPutBody.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({
+          success: false,
+          message: "Validation failed",
+          errors: result.error.issues[0]?.message,
+        });
+      }
+
+      const { studentId, firstName, lastName, program, interests, emails } =
+        result.data;
+
+      // STUDENT can edit only their own data
+      if (user?.role === "STUDENT" && user.studentId !== studentId) {
+        return res.status(403).json({
+          success: false,
+          message: "Forbidden access",
+        });
+      }
+
+      // check if the student exists
+      const found_student = await prisma.student.findUnique({
+        where: { studentId },
+      });
+      if (!found_student) {
+        return res.status(404).json({
+          success: false,
+          message: "Student does not exists",
+        });
+      }
+
+      // update only fields that were sent (skip null / undefined)
+      const data: Record<string, unknown> = {};
+      if (firstName != null) data.firstName = firstName;
+      if (lastName != null) data.lastName = lastName;
+      if (program != null) data.program = program;
+      if (interests != null) data.interests = interests;
+      if (emails != null) data.emails = emails;
+
+      const updated = await prisma.student.update({
+        where: { studentId },
+        data,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Student has been updated",
+        data: updated,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        message: "Something is wrong, please try again",
+        error: err,
+      });
+    }
+  },
+);
+
+// DELETE /api/v3/students, body = { studentId }
+// ADMIN only: delete enrollments of the student first, then the student
+router.delete(
+  "/",
+  authenticateToken,
+  checkRoleAdmin,
+  async (req: CustomRequest, res: Response) => {
+    try {
+      // validate studentId
+      const result = zStudentId.safeParse(req.body?.studentId);
+      if (!result.success) {
+        return res.status(400).json({
+          success: false,
+          message: "Validation failed",
+          errors: result.error.issues[0]?.message,
+        });
+      }
+      const studentId = result.data;
+
+      // check if the student exists
+      const found_student = await prisma.student.findUnique({
+        where: { studentId },
+      });
+      if (!found_student) {
+        return res.status(404).json({
+          success: false,
+          message: "Student does not exists",
+        });
+      }
+
+      // delete enrollments (and files) first, then the student (atomic)
+      await prisma.$transaction([
+        prisma.enrollment.deleteMany({ where: { studentId } }),
+        prisma.file.deleteMany({ where: { studentId } }),
+        prisma.student.delete({ where: { studentId } }),
+      ]);
+
+      return res.status(200).json({
+        success: true,
+        message: "Student has been deleted",
+        data: found_student,
+      });
+    } catch (err) {
+      return res.status(500).json({
+        success: false,
+        message: "Something is wrong, please try again",
+        error: err,
+      });
+    }
+  },
+);
+
 export default router;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
